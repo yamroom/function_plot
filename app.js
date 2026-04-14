@@ -18,8 +18,51 @@
   const DEFAULT_X_VIEW = Object.freeze({ min: -10, max: 10 });
   const COLOR_POOL = ["#d1495b", "#2c7da0", "#ef8a17", "#2a9d8f", "#6d597a", "#386641"];
   const SETTINGS_FORMAT = "interactive-function-explorer";
-  const SETTINGS_VERSION = 1;
+  const SETTINGS_VERSION = 2;
+  const SUPPORTED_SETTINGS_VERSIONS = new Set([1, SETTINGS_VERSION]);
   const HOVER_DISTANCE_THRESHOLD_PX = 12;
+  const TRANSFORM_LIBRARY = Object.freeze({
+    derivative: {
+      label: "Derivative",
+      buildExpression: (sourceExpression) => `d/dx(${sourceExpression})`
+    },
+    secondDerivative: {
+      label: "Second derivative",
+      buildExpression: (sourceExpression) => `d^2/dx^2(${sourceExpression})`
+    },
+    reciprocal: {
+      label: "Reciprocal",
+      buildExpression: (sourceExpression) => `1/(${sourceExpression})`
+    },
+    log: {
+      label: "Natural log",
+      buildExpression: (sourceExpression) => `ln(${sourceExpression})`
+    },
+    log10: {
+      label: "Base-10 log",
+      buildExpression: (sourceExpression) => `log10(${sourceExpression})`
+    },
+    abs: {
+      label: "Absolute value",
+      buildExpression: (sourceExpression) => `abs(${sourceExpression})`
+    },
+    square: {
+      label: "Square",
+      buildExpression: (sourceExpression) => `(${sourceExpression})^2`
+    },
+    negate: {
+      label: "Negate",
+      buildExpression: (sourceExpression) => `-(${sourceExpression})`
+    },
+    sqrt: {
+      label: "Square root",
+      buildExpression: (sourceExpression) => `sqrt(${sourceExpression})`
+    },
+    exp: {
+      label: "Exponential",
+      buildExpression: (sourceExpression) => `exp(${sourceExpression})`
+    }
+  });
 
   const state = {
     functions: [
@@ -30,6 +73,7 @@
     parameters: [
       { id: "param-beta", name: "beta", value: 5, min: 0.1, max: 50, step: 0.1 }
     ],
+    derivedCurves: [],
     axis: {
       logX: false,
       logY: false
@@ -42,6 +86,8 @@
     },
     hover: null,
     selection: null,
+    selectedTransformKey: "derivative",
+    selectedTransformTargetId: null,
     compiled: null,
     noticeMessages: [],
     runtimeMessages: [],
@@ -66,6 +112,12 @@
     exportSettingsBtn: document.getElementById("exportSettingsBtn"),
     loadSettingsBtn: document.getElementById("loadSettingsBtn"),
     settingsFileInput: document.getElementById("settingsFileInput"),
+    downloadImageBtn: document.getElementById("downloadImageBtn"),
+    functionTransformPanel: document.getElementById("functionTransformPanel"),
+    transformTargetSelect: document.getElementById("transformTargetSelect"),
+    applyTransformBtn: document.getElementById("applyTransformBtn"),
+    derivedCurveList: document.getElementById("derivedCurveList"),
+    transformSelectionText: document.getElementById("transformSelectionText"),
     messages: document.getElementById("messages"),
     legend: document.getElementById("legend"),
     plotStatus: document.getElementById("plotStatus"),
@@ -94,6 +146,7 @@
       dom.settingsFileInput.click();
     });
     dom.settingsFileInput.addEventListener("change", handleImportSettings);
+    dom.downloadImageBtn.addEventListener("click", handleDownloadImage);
 
     dom.functionList.addEventListener("input", handleFunctionEditorInput);
     dom.functionList.addEventListener("change", handleFunctionEditorInput);
@@ -102,6 +155,9 @@
     dom.parameterList.addEventListener("input", handleParameterEditorInput);
     dom.parameterList.addEventListener("change", handleParameterEditorInput);
     dom.parameterList.addEventListener("click", handleParameterEditorClick);
+
+    dom.functionTransformPanel.addEventListener("click", handleTransformPanelClick);
+    dom.functionTransformPanel.addEventListener("change", handleTransformPanelChange);
 
     dom.logXToggle.addEventListener("change", () => {
       state.axis.logX = dom.logXToggle.checked;
@@ -160,6 +216,7 @@
 
     const plotOutcome = drawPlot(compiled);
     state.runtimeMessages = plotOutcome.runtimeMessages;
+    renderTransformPanel(compiled);
     renderLegend(compiled);
     renderMessages(state.noticeMessages, compiled.messages, plotOutcome.runtimeMessages);
     renderStatus(plotOutcome);
@@ -311,8 +368,12 @@
 
       const compiled = {
         id: item.id,
+        plotId: `function:${item.id}`,
+        kind: "function",
         name: item.name,
+        expressionText: `${item.name}(x)`,
         definition: item.definition,
+        annotationText: item.definition,
         color: item.color,
         enabled: item.enabled,
         dependencies: item.dependencies || [],
@@ -323,15 +384,61 @@
       compiledRows.set(item.id, compiled);
     });
 
-    const activeFunctions = state.functions
+    const baseCurves = state.functions
       .map((row) => compiledRows.get(row.id))
-      .filter(Boolean)
-      .filter((entry) => entry.enabled);
+      .filter(Boolean);
+
+    const compiledPlotById = new Map();
+    baseCurves.forEach((entry) => {
+      compiledPlotById.set(entry.plotId, entry);
+    });
+
+    const derivedRows = [];
+    state.derivedCurves.forEach((row) => {
+      const transform = TRANSFORM_LIBRARY[row.transformKey];
+      if (!transform) {
+        messages.push(makeMessage("error", `Unknown transform "${row.transformKey}".`, row.id));
+        return;
+      }
+
+      const source = compiledPlotById.get(row.sourcePlotId);
+      if (!source) {
+        messages.push(makeMessage("error", "The source curve for this derived plot is no longer available.", row.id));
+        return;
+      }
+
+      const expressionText = transform.buildExpression(source.expressionText);
+      const compiled = {
+        id: row.id,
+        plotId: `derived:${row.id}`,
+        kind: "derived",
+        name: expressionText,
+        expressionText,
+        definition: buildDerivedDefinition(source, transform, expressionText),
+        annotationText: buildDerivedAnnotationText(source, transform, expressionText),
+        color: row.color,
+        enabled: row.enabled,
+        sourcePlotId: row.sourcePlotId,
+        sourceName: source.name,
+        transformKey: row.transformKey,
+        evaluate: createDerivedEvaluator(row.transformKey, source.evaluate)
+      };
+
+      compiledPlotById.set(compiled.plotId, compiled);
+      derivedRows.push(compiled);
+    });
+
+    const plottedCurves = [...baseCurves, ...derivedRows];
+    const activeFunctions = plottedCurves.filter((entry) => entry.enabled);
 
     return {
       messages,
       parameterMap,
       compiledRows,
+      compiledPlotById,
+      baseCurves,
+      derivedRows,
+      plottedCurves,
       activeFunctions,
       functionCount: activeFunctions.length,
       definitionCount: compiledRows.size
@@ -836,7 +943,7 @@
     }
 
     if (compiled.activeFunctions.length === 0) {
-      drawEmptyState("No valid enabled functions are available to plot.", plotRect);
+      drawEmptyState("No valid enabled curves are available to plot.", plotRect);
       drawSelection(viewport);
       drawHoverOverlay(null);
       syncHoverTooltip(null);
@@ -1362,15 +1469,16 @@
   }
 
   function renderLegend(compiled) {
-    if (compiled.activeFunctions.length === 0) {
+    const entries = collectLegendEntries(compiled);
+    if (entries.length === 0) {
       dom.legend.innerHTML = '<div class="legend-item"><span>No active curves</span></div>';
       return;
     }
 
-    dom.legend.innerHTML = compiled.activeFunctions.map((fn) => `
+    dom.legend.innerHTML = entries.map((entry) => `
       <div class="legend-item">
-        <span class="legend-swatch" style="background:${escapeHtml(fn.color)}"></span>
-        <span>${escapeHtml(fn.name)}</span>
+        <span class="legend-swatch" style="background:${escapeHtml(entry.color)}"></span>
+        <span>${escapeHtml(entry.name)}</span>
       </div>
     `).join("");
   }
@@ -1391,7 +1499,7 @@
 
   function renderStatus(plotOutcome) {
     const samplesText = plotOutcome.sampleCount > 0 ? `${plotOutcome.sampleCount.toLocaleString()} direct samples / curve` : "No active samples";
-    dom.plotStatus.textContent = `${plotOutcome.plottedFunctions} plotted functions | ${samplesText}`;
+    dom.plotStatus.textContent = `${plotOutcome.plottedFunctions} plotted curves | ${samplesText}`;
   }
 
   function handleExportSettings() {
@@ -1412,6 +1520,37 @@
       setNotice("error", `Could not export settings: ${error.message}`);
     }
     refresh({ renderOnly: true });
+  }
+
+  function handleDownloadImage() {
+    if (!state.compiled) {
+      refresh({ renderOnly: true });
+    }
+
+    const compiled = state.compiled || compileModel();
+    const previousHover = state.hover;
+    const previousSelection = state.selection;
+
+    state.hover = null;
+    state.selection = null;
+    refresh({ renderOnly: true });
+
+    try {
+      const exportCanvas = renderAnnotatedExportCanvas(compiled);
+      const link = document.createElement("a");
+      link.href = exportCanvas.toDataURL("image/png");
+      link.download = `function-plot-${buildTimestampLabel()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setNotice("info", "PNG image downloaded with curve annotations.");
+    } catch (error) {
+      setNotice("error", `Could not export image: ${error.message}`);
+    } finally {
+      state.hover = previousHover;
+      state.selection = previousSelection;
+      refresh({ renderOnly: true });
+    }
   }
 
   async function handleImportSettings(event) {
@@ -1452,6 +1591,12 @@
         max: toFiniteNumber(row.max),
         step: toFiniteNumber(row.step)
       })),
+      derivedCurves: state.derivedCurves.map((row) => ({
+        sourceRef: serializeDerivedSourceRef(row.sourcePlotId),
+        transformKey: row.transformKey,
+        color: row.color,
+        enabled: !!row.enabled
+      })),
       axis: {
         logX: !!state.axis.logX,
         logY: !!state.axis.logY
@@ -1482,7 +1627,7 @@
     if (raw.format !== SETTINGS_FORMAT) {
       throw new Error(`Unsupported settings format "${raw.format ?? ""}".`);
     }
-    if (raw.version !== SETTINGS_VERSION) {
+    if (!SUPPORTED_SETTINGS_VERSIONS.has(raw.version)) {
       throw new Error(`Unsupported settings version "${raw.version ?? ""}".`);
     }
     if (!Array.isArray(raw.functions) || !Array.isArray(raw.parameters)) {
@@ -1491,10 +1636,13 @@
 
     const functions = raw.functions.map((entry, index) => validateImportedFunction(entry, index));
     const parameters = raw.parameters.map((entry, index) => validateImportedParameter(entry, index));
+    const derivedCurves = Array.isArray(raw.derivedCurves)
+      ? raw.derivedCurves.map((entry, index) => validateImportedDerivedCurve(entry, index))
+      : [];
     const axis = validateImportedAxis(raw.axis);
     const view = validateImportedView(raw.view);
 
-    return { functions, parameters, axis, view };
+    return { functions, parameters, derivedCurves, axis, view };
   }
 
   function validateImportedFunction(entry, index) {
@@ -1544,6 +1692,28 @@
     return { name, value, min, max, step };
   }
 
+  function validateImportedDerivedCurve(entry, index) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`Derived curve entry ${index + 1} must be an object.`);
+    }
+    if (typeof entry.transformKey !== "string" || !TRANSFORM_LIBRARY[entry.transformKey]) {
+      throw new Error(`Derived curve entry ${index + 1} has an unknown transform.`);
+    }
+    if (typeof entry.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(entry.color)) {
+      throw new Error(`Derived curve entry ${index + 1} has an invalid color.`);
+    }
+    if (typeof entry.enabled !== "boolean") {
+      throw new Error(`Derived curve entry ${index + 1} must include a boolean enabled flag.`);
+    }
+    const sourceRef = validateDerivedSourceRef(entry.sourceRef ?? entry.sourcePlotId, index);
+    return {
+      sourceRef,
+      transformKey: entry.transformKey,
+      color: entry.color,
+      enabled: entry.enabled
+    };
+  }
+
   function validateImportedAxis(axis) {
     if (!axis || typeof axis !== "object" || Array.isArray(axis)) {
       throw new Error("Settings file is missing the axis object.");
@@ -1587,10 +1757,24 @@
       max: entry.max,
       step: entry.step
     }));
+    const importedDerivedRows = [];
+    (snapshot.derivedCurves || []).forEach((entry, index) => {
+      const id = buildRowId("derived", index);
+      importedDerivedRows.push({
+        id,
+        sourcePlotId: resolveImportedSourcePlotId(entry.sourceRef, state.functions, importedDerivedRows),
+        transformKey: entry.transformKey,
+        color: entry.color,
+        enabled: entry.enabled
+      });
+    });
+    state.derivedCurves = importedDerivedRows;
     state.axis = { ...snapshot.axis };
     state.view = { ...snapshot.view };
     state.hover = null;
     state.selection = null;
+    state.selectedTransformTargetId = null;
+    state.selectedTransformKey = "derivative";
     state.compiled = null;
     state.runtimeMessages = [];
     state.nextFunctionIndex = deriveNextFunctionIndex(state.functions);
@@ -1702,6 +1886,192 @@
     }
 
     refresh({ autoFitY: false });
+  }
+
+  function handleTransformPanelClick(event) {
+    const transformChip = event.target.closest(".transform-chip");
+    if (transformChip) {
+      const { transform } = transformChip.dataset;
+      if (transform && TRANSFORM_LIBRARY[transform]) {
+        state.selectedTransformKey = transform;
+        renderTransformPanel(state.compiled || compileModel());
+      }
+      return;
+    }
+
+    if (event.target.closest("#applyTransformBtn")) {
+      applySelectedTransform();
+      return;
+    }
+
+    const removeButton = event.target.closest(".remove-derived");
+    if (!removeButton) {
+      return;
+    }
+
+    const card = event.target.closest(".derived-curve-item");
+    if (!card) {
+      return;
+    }
+
+    const removedPlotId = `derived:${card.dataset.derivedId}`;
+    state.derivedCurves = state.derivedCurves.filter((row) => row.id !== card.dataset.derivedId);
+    if (state.selectedTransformTargetId === removedPlotId) {
+      state.selectedTransformTargetId = null;
+    }
+    refresh({ autoFitY: false });
+  }
+
+  function handleTransformPanelChange(event) {
+    if (event.target === dom.transformTargetSelect) {
+      state.selectedTransformTargetId = event.target.value || null;
+      renderTransformPanel(state.compiled || compileModel());
+      return;
+    }
+
+    const card = event.target.closest(".derived-curve-item");
+    if (!card) {
+      return;
+    }
+
+    const row = state.derivedCurves.find((entry) => entry.id === card.dataset.derivedId);
+    if (!row) {
+      return;
+    }
+
+    if (event.target.classList.contains("derived-enabled")) {
+      row.enabled = event.target.checked;
+      refresh({ autoFitY: false });
+      return;
+    }
+
+    if (event.target.classList.contains("derived-color")) {
+      row.color = event.target.value;
+      refresh({ autoFitY: false });
+    }
+  }
+
+  function applySelectedTransform() {
+    const compiled = state.compiled || compileModel();
+    const targets = compiled.plottedCurves || [];
+    const selectedTarget = targets.find((entry) => entry.plotId === state.selectedTransformTargetId) || targets[0];
+    const transformKey = state.selectedTransformKey;
+    const transform = TRANSFORM_LIBRARY[transformKey];
+
+    if (!selectedTarget || !transform) {
+      setNotice("warning", "Select a valid curve and transform before creating a derived plot.");
+      refresh({ renderOnly: true });
+      return;
+    }
+
+    const derivedId = buildRowId("derived", state.derivedCurves.length);
+    state.derivedCurves.push({
+      id: derivedId,
+      sourcePlotId: selectedTarget.plotId,
+      transformKey,
+      color: deriveCurveColor(selectedTarget.color, state.derivedCurves.length + 1),
+      enabled: true
+    });
+    state.selectedTransformTargetId = `derived:${derivedId}`;
+    setNotice("info", `Added ${transform.label.toLowerCase()} curve for ${selectedTarget.name}.`);
+    refresh({ autoFitY: false });
+  }
+
+  function renderTransformPanel(compiled) {
+    const targets = compiled && Array.isArray(compiled.plottedCurves) ? compiled.plottedCurves : [];
+    const hasTransforms = targets.length > 0;
+    if (!state.selectedTransformKey || !TRANSFORM_LIBRARY[state.selectedTransformKey]) {
+      state.selectedTransformKey = "derivative";
+    }
+    if (!targets.some((entry) => entry.plotId === state.selectedTransformTargetId)) {
+      state.selectedTransformTargetId = targets[0] ? targets[0].plotId : null;
+    }
+
+    dom.transformTargetSelect.disabled = !hasTransforms;
+    dom.transformTargetSelect.innerHTML = hasTransforms
+      ? targets.map((entry) => `<option value="${escapeHtml(entry.plotId)}">${escapeHtml(entry.name)}</option>`).join("")
+      : '<option value="">No available curve</option>';
+
+    if (hasTransforms && state.selectedTransformTargetId) {
+      dom.transformTargetSelect.value = state.selectedTransformTargetId;
+    }
+
+    dom.functionTransformPanel.querySelectorAll(".transform-chip").forEach((chip) => {
+      const isSelected = chip.dataset.transform === state.selectedTransformKey;
+      chip.classList.toggle("is-selected", isSelected);
+      chip.disabled = !hasTransforms;
+    });
+
+    dom.applyTransformBtn.disabled = !hasTransforms;
+
+    const selectedTarget = targets.find((entry) => entry.plotId === state.selectedTransformTargetId) || null;
+    const transform = TRANSFORM_LIBRARY[state.selectedTransformKey];
+    if (!selectedTarget || !transform) {
+      dom.transformSelectionText.textContent = "Choose a valid curve to enable transforms. Derivative curves use direct finite differences from the underlying evaluator.";
+    } else if (state.selectedTransformKey === "derivative" || state.selectedTransformKey === "secondDerivative") {
+      dom.transformSelectionText.textContent = `${transform.label} will be applied to ${selectedTarget.name}. This operation is computed from direct function evaluations with symmetric finite differences.`;
+    } else {
+      dom.transformSelectionText.textContent = `${transform.label} will be applied to ${selectedTarget.name}. The transformed curve is evaluated directly from the source function at every sampled x value.`;
+    }
+
+    renderDerivedCurveList(compiled);
+  }
+
+  function renderDerivedCurveList(compiled) {
+    if (state.derivedCurves.length === 0) {
+      dom.derivedCurveList.innerHTML = '<div class="derived-curve-empty">No derived curves yet. Pick a target curve, choose a transform, and apply it to add another plot layer.</div>';
+      return;
+    }
+
+    const messagesByRow = new Map();
+    (compiled ? compiled.messages : []).forEach((message) => {
+      if (!message.rowId) {
+        return;
+      }
+      if (!messagesByRow.has(message.rowId)) {
+        messagesByRow.set(message.rowId, []);
+      }
+      messagesByRow.get(message.rowId).push(message);
+    });
+
+    const compiledByRowId = new Map();
+    (compiled && Array.isArray(compiled.derivedRows) ? compiled.derivedRows : []).forEach((entry) => {
+      compiledByRowId.set(entry.id, entry);
+    });
+
+    dom.derivedCurveList.innerHTML = state.derivedCurves.map((row) => {
+      const compiledRow = compiledByRowId.get(row.id);
+      const transform = TRANSFORM_LIBRARY[row.transformKey];
+      const rowMessages = messagesByRow.get(row.id) || [];
+      const hasError = rowMessages.some((message) => message.level === "error");
+      const title = compiledRow ? compiledRow.name : buildFallbackDerivedTitle(row, transform);
+      const metaText = compiledRow
+        ? compiledRow.annotationText
+        : `Source curve: ${describeSourcePlotId(row.sourcePlotId)}.`;
+
+      return `
+        <div class="derived-curve-item ${hasError ? "has-error" : ""}" data-derived-id="${row.id}">
+          <div class="derived-curve-main">
+            <div class="derived-curve-title">
+              <span class="legend-swatch" style="background:${escapeHtml(row.color)}"></span>
+              <span>${escapeHtml(title)}</span>
+            </div>
+            <div class="derived-curve-meta">${escapeHtml(metaText)}</div>
+            <div class="row-errors">
+              ${rowMessages.filter((message) => message.level === "error").map((message) => `<div class="row-error">${escapeHtml(message.text)}</div>`).join("")}
+            </div>
+          </div>
+          <div class="derived-curve-actions">
+            <label class="toggle-pill derived-toggle">
+              <input class="derived-enabled" type="checkbox" ${row.enabled ? "checked" : ""}>
+              <span>Show</span>
+            </label>
+            <input class="derived-color" type="color" value="${escapeHtml(row.color)}" aria-label="Derived curve color">
+            <button class="ghost-button remove-derived" type="button">Remove</button>
+          </div>
+        </div>
+      `;
+    }).join("");
   }
 
   function handlePointerDown(event) {
@@ -1891,6 +2261,383 @@
       axis: state.axis,
       xRange
     };
+  }
+
+  function createDerivedEvaluator(transformKey, sourceEvaluate) {
+    return function evaluateDerivedCurve(x) {
+      return evaluateDerivedValue(transformKey, sourceEvaluate, x);
+    };
+  }
+
+  function evaluateDerivedValue(transformKey, sourceEvaluate, x) {
+    switch (transformKey) {
+      case "derivative":
+        return evaluateFirstDerivative(sourceEvaluate, x);
+      case "secondDerivative":
+        return evaluateSecondDerivative(sourceEvaluate, x);
+      case "reciprocal": {
+        const value = evaluateSourceValue(sourceEvaluate, x);
+        return 1 / value;
+      }
+      case "log":
+        return Math.log(evaluateSourceValue(sourceEvaluate, x));
+      case "log10":
+        return Math.log10(evaluateSourceValue(sourceEvaluate, x));
+      case "abs":
+        return Math.abs(evaluateSourceValue(sourceEvaluate, x));
+      case "square": {
+        const value = evaluateSourceValue(sourceEvaluate, x);
+        return value * value;
+      }
+      case "negate":
+        return -evaluateSourceValue(sourceEvaluate, x);
+      case "sqrt":
+        return Math.sqrt(evaluateSourceValue(sourceEvaluate, x));
+      case "exp":
+        return Math.exp(evaluateSourceValue(sourceEvaluate, x));
+      default:
+        return Number.NaN;
+    }
+  }
+
+  function evaluateFirstDerivative(sourceEvaluate, x) {
+    const h = estimateTransformStep(x);
+    const m2 = evaluateSourceValue(sourceEvaluate, x - 2 * h);
+    const m1 = evaluateSourceValue(sourceEvaluate, x - h);
+    const p1 = evaluateSourceValue(sourceEvaluate, x + h);
+    const p2 = evaluateSourceValue(sourceEvaluate, x + 2 * h);
+    if ([m2, m1, p1, p2].every(Number.isFinite)) {
+      return (m2 - 8 * m1 + 8 * p1 - p2) / (12 * h);
+    }
+
+    if (Number.isFinite(m1) && Number.isFinite(p1)) {
+      return (p1 - m1) / (2 * h);
+    }
+
+    const center = evaluateSourceValue(sourceEvaluate, x);
+    if (Number.isFinite(center) && Number.isFinite(p1)) {
+      return (p1 - center) / h;
+    }
+    if (Number.isFinite(center) && Number.isFinite(m1)) {
+      return (center - m1) / h;
+    }
+    return Number.NaN;
+  }
+
+  function evaluateSecondDerivative(sourceEvaluate, x) {
+    const h = estimateTransformStep(x);
+    const m2 = evaluateSourceValue(sourceEvaluate, x - 2 * h);
+    const m1 = evaluateSourceValue(sourceEvaluate, x - h);
+    const center = evaluateSourceValue(sourceEvaluate, x);
+    const p1 = evaluateSourceValue(sourceEvaluate, x + h);
+    const p2 = evaluateSourceValue(sourceEvaluate, x + 2 * h);
+    if ([m2, m1, center, p1, p2].every(Number.isFinite)) {
+      return (-p2 + 16 * p1 - 30 * center + 16 * m1 - m2) / (12 * h * h);
+    }
+
+    if ([m1, center, p1].every(Number.isFinite)) {
+      return (p1 - 2 * center + m1) / (h * h);
+    }
+    return Number.NaN;
+  }
+
+  function evaluateSourceValue(sourceEvaluate, x) {
+    try {
+      return sourceEvaluate(x);
+    } catch (error) {
+      return Number.NaN;
+    }
+  }
+
+  function estimateTransformStep(x) {
+    const rawMin = toFiniteNumber(state.view.xMin);
+    const rawMax = toFiniteNumber(state.view.xMax);
+    const span = Number.isFinite(rawMin) && Number.isFinite(rawMax) ? Math.abs(rawMax - rawMin) : Math.max(1, Math.abs(x));
+    const baseScale = Math.max(Math.abs(x), 1);
+    const stepFloor = state.axis.logX && x > 0 ? x * 1e-6 : 1e-6;
+    const step = Math.max(stepFloor, span * 1e-4, baseScale * 1e-6);
+    return Math.min(Math.max(step, 1e-7), Math.max(span * 0.05, 1e-4));
+  }
+
+  function buildDerivedDefinition(source, transform, expressionText) {
+    return `${expressionText}`;
+  }
+
+  function buildDerivedAnnotationText(source, transform, expressionText) {
+    const sourceText = source.kind === "function" ? source.definition : source.expressionText;
+    return `${transform.label} of ${sourceText}`;
+  }
+
+  function buildFallbackDerivedTitle(row, transform) {
+    if (!transform) {
+      return `Derived curve from ${describeSourcePlotId(row.sourcePlotId)}`;
+    }
+    return transform.buildExpression(describeSourcePlotId(row.sourcePlotId));
+  }
+
+  function describeSourcePlotId(sourcePlotId) {
+    if (typeof sourcePlotId !== "string") {
+      return "unknown curve";
+    }
+    if (sourcePlotId.startsWith("function:")) {
+      return "function curve";
+    }
+    if (sourcePlotId.startsWith("derived:")) {
+      return "derived curve";
+    }
+    return sourcePlotId;
+  }
+
+  function deriveCurveColor(baseColor, offsetIndex) {
+    const fallback = COLOR_POOL[offsetIndex % COLOR_POOL.length];
+    if (baseColor === fallback) {
+      return COLOR_POOL[(offsetIndex + 1) % COLOR_POOL.length];
+    }
+    return fallback;
+  }
+
+  function collectLegendEntries(compiled) {
+    return compiled.activeFunctions.map((entry) => ({
+      color: entry.color,
+      name: entry.name,
+      annotationText: entry.annotationText
+    }));
+  }
+
+  function renderAnnotatedExportCanvas(compiled) {
+    const entries = collectLegendEntries(compiled);
+    const plotWidth = dom.canvas.width;
+    const plotHeight = dom.canvas.height;
+    const exportCanvas = document.createElement("canvas");
+    const exportCtx = exportCanvas.getContext("2d");
+    const scale = Math.max(1, Math.round(window.devicePixelRatio || 1));
+    const padding = 28 * scale;
+    const panelGap = 20 * scale;
+    const panelPadding = 26 * scale;
+    const titleFont = `700 ${30 * scale}px "Aptos", "Segoe UI", sans-serif`;
+    const metaFont = `${16 * scale}px "Aptos", "Segoe UI", sans-serif`;
+    const nameFont = `700 ${22 * scale}px "Aptos", "Segoe UI", sans-serif`;
+    const formulaFont = `${18 * scale}px "Consolas", "Cascadia Mono", "Segoe UI Mono", monospace`;
+    const panelWidth = Math.max(360 * scale, Math.round(plotWidth * 0.34));
+    const panelContentWidth = panelWidth - panelPadding * 2;
+    const rangeLine = buildExportRangeText();
+    const panelHeight = measureAnnotationPanelHeight(entries, exportCtx, panelContentWidth, panelPadding, {
+      titleFont,
+      metaFont,
+      nameFont,
+      formulaFont,
+      scale,
+      rangeLine
+    });
+
+    exportCanvas.width = plotWidth + panelGap + panelWidth;
+    exportCanvas.height = Math.max(plotHeight, panelHeight);
+
+    exportCtx.fillStyle = "#f9f4e8";
+    exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+    exportCtx.drawImage(dom.canvas, 0, 0, plotWidth, plotHeight);
+
+    const panelLeft = plotWidth + panelGap;
+    const panelTop = 0;
+    exportCtx.fillStyle = "rgba(255, 252, 246, 0.98)";
+    exportCtx.fillRect(panelLeft, panelTop, panelWidth, exportCanvas.height);
+    exportCtx.strokeStyle = "rgba(23, 33, 43, 0.12)";
+    exportCtx.lineWidth = 1;
+    exportCtx.strokeRect(panelLeft + 0.5, panelTop + 0.5, panelWidth - 1, exportCanvas.height - 1);
+
+    let cursorY = panelTop + panelPadding;
+    exportCtx.fillStyle = "#17212b";
+    exportCtx.font = titleFont;
+    exportCtx.textBaseline = "top";
+    exportCtx.fillText("Function Annotations", panelLeft + panelPadding, cursorY);
+    cursorY += 38 * scale;
+
+    exportCtx.fillStyle = "#5f6b75";
+    exportCtx.font = metaFont;
+    const rangeLines = wrapTextToLines(exportCtx, rangeLine, panelContentWidth, metaFont);
+    rangeLines.forEach((line) => {
+      exportCtx.fillText(line, panelLeft + panelPadding, cursorY);
+      cursorY += 22 * scale;
+    });
+    cursorY += 12 * scale;
+
+    if (entries.length === 0) {
+      exportCtx.fillStyle = "#5f6b75";
+      exportCtx.fillText("No active curves are currently visible.", panelLeft + panelPadding, cursorY);
+      return exportCanvas;
+    }
+
+    entries.forEach((entry) => {
+      const formulaLines = wrapTextToLines(exportCtx, entry.annotationText, panelContentWidth - 48 * scale, formulaFont);
+      const cardHeight = Math.max(96 * scale, 34 * scale + formulaLines.length * 24 * scale + 28 * scale);
+
+      exportCtx.fillStyle = "rgba(255, 255, 255, 0.92)";
+      exportCtx.strokeStyle = "rgba(23, 33, 43, 0.1)";
+      exportCtx.lineWidth = 1;
+      roundRect(exportCtx, panelLeft + panelPadding, cursorY, panelContentWidth, cardHeight, 18 * scale);
+      exportCtx.fill();
+      exportCtx.stroke();
+
+      const cardLeft = panelLeft + panelPadding + 18 * scale;
+      const cardTop = cursorY + 16 * scale;
+      exportCtx.fillStyle = entry.color;
+      exportCtx.beginPath();
+      exportCtx.arc(cardLeft + 8 * scale, cardTop + 12 * scale, 9 * scale, 0, Math.PI * 2);
+      exportCtx.fill();
+
+      exportCtx.fillStyle = "#17212b";
+      exportCtx.font = nameFont;
+      exportCtx.fillText(entry.name, cardLeft + 28 * scale, cardTop);
+
+      exportCtx.fillStyle = "#5f6b75";
+      exportCtx.font = formulaFont;
+      let formulaY = cardTop + 34 * scale;
+      formulaLines.forEach((line) => {
+        exportCtx.fillText(line, cardLeft + 28 * scale, formulaY);
+        formulaY += 24 * scale;
+      });
+      cursorY += cardHeight + 14 * scale;
+    });
+
+    return exportCanvas;
+  }
+
+  function measureAnnotationPanelHeight(entries, exportCtx, panelContentWidth, panelPadding, typography) {
+    const { titleFont, metaFont, formulaFont, scale, rangeLine } = typography;
+    let height = panelPadding;
+    exportCtx.font = titleFont;
+    height += 38 * scale;
+
+    const rangeLines = wrapTextToLines(exportCtx, rangeLine, panelContentWidth, metaFont);
+    height += rangeLines.length * 22 * scale + 12 * scale;
+
+    if (entries.length === 0) {
+      return height + 48 * scale;
+    }
+
+    entries.forEach((entry) => {
+      const formulaLines = wrapTextToLines(exportCtx, entry.annotationText, panelContentWidth - 48 * scale, formulaFont);
+      const cardHeight = Math.max(96 * scale, 34 * scale + formulaLines.length * 24 * scale + 28 * scale);
+      height += cardHeight + 14 * scale;
+    });
+
+    return height + panelPadding;
+  }
+
+  function wrapTextToLines(context, text, maxWidth, font) {
+    context.font = font;
+    const normalized = String(text);
+    if (!normalized.trim()) {
+      return [""];
+    }
+
+    const lines = [];
+    let current = "";
+    for (const character of normalized) {
+      const candidate = current + character;
+      if (current && context.measureText(candidate).width > maxWidth) {
+        lines.push(current);
+        current = character;
+      } else {
+        current = candidate;
+      }
+    }
+    if (current) {
+      lines.push(current);
+    }
+    return lines;
+  }
+
+  function roundRect(context, x, y, width, height, radius) {
+    const safeRadius = Math.min(radius, width / 2, height / 2);
+    context.beginPath();
+    context.moveTo(x + safeRadius, y);
+    context.arcTo(x + width, y, x + width, y + height, safeRadius);
+    context.arcTo(x + width, y + height, x, y + height, safeRadius);
+    context.arcTo(x, y + height, x, y, safeRadius);
+    context.arcTo(x, y, x + width, y, safeRadius);
+    context.closePath();
+  }
+
+  function buildExportRangeText() {
+    const xMode = state.axis.logX ? "log x" : "linear x";
+    const yMode = state.axis.logY ? "log y" : "linear y";
+    return `${xMode} | ${yMode} | x: ${formatNumber(state.view.xMin)} to ${formatNumber(state.view.xMax)} | y: ${formatNumber(state.view.yMin)} to ${formatNumber(state.view.yMax)}`;
+  }
+
+  function buildTimestampLabel() {
+    const now = new Date();
+    const parts = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+      String(now.getHours()).padStart(2, "0"),
+      String(now.getMinutes()).padStart(2, "0"),
+      String(now.getSeconds()).padStart(2, "0")
+    ];
+    return `${parts[0]}${parts[1]}${parts[2]}-${parts[3]}${parts[4]}${parts[5]}`;
+  }
+
+  function serializeDerivedSourceRef(sourcePlotId) {
+    if (typeof sourcePlotId !== "string") {
+      throw new Error("A derived curve is missing its source reference.");
+    }
+
+    if (sourcePlotId.startsWith("function:")) {
+      const sourceId = sourcePlotId.slice("function:".length);
+      const index = state.functions.findIndex((row) => row.id === sourceId);
+      if (index < 0) {
+        throw new Error("A derived curve references a function that no longer exists.");
+      }
+      return { kind: "function", index };
+    }
+
+    if (sourcePlotId.startsWith("derived:")) {
+      const sourceId = sourcePlotId.slice("derived:".length);
+      const index = state.derivedCurves.findIndex((row) => row.id === sourceId);
+      if (index < 0) {
+        throw new Error("A derived curve references another derived curve that no longer exists.");
+      }
+      return { kind: "derived", index };
+    }
+
+    throw new Error(`Unsupported derived source reference "${sourcePlotId}".`);
+  }
+
+  function validateDerivedSourceRef(raw, index) {
+    if (typeof raw === "string" && raw.trim() !== "") {
+      return { kind: "legacy", sourcePlotId: raw };
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`Derived curve entry ${index + 1} is missing a valid sourceRef.`);
+    }
+    if (!["function", "derived"].includes(raw.kind)) {
+      throw new Error(`Derived curve entry ${index + 1} has an invalid sourceRef kind.`);
+    }
+    const numericIndex = Number(raw.index);
+    if (!Number.isInteger(numericIndex) || numericIndex < 0) {
+      throw new Error(`Derived curve entry ${index + 1} has an invalid sourceRef index.`);
+    }
+    return { kind: raw.kind, index: numericIndex };
+  }
+
+  function resolveImportedSourcePlotId(sourceRef, functions, importedDerivedRows) {
+    if (sourceRef.kind === "legacy") {
+      return sourceRef.sourcePlotId;
+    }
+    if (sourceRef.kind === "function") {
+      const source = functions[sourceRef.index];
+      if (!source) {
+        throw new Error("A derived curve references a function index that is missing from the imported file.");
+      }
+      return `function:${source.id}`;
+    }
+
+    const source = importedDerivedRows[sourceRef.index];
+    if (!source) {
+      throw new Error("A derived curve references a derived curve index that is missing or appears later in the imported file.");
+    }
+    return `derived:${source.id}`;
   }
 
   function readViewInputs(options = {}) {

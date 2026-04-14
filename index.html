@@ -43,6 +43,45 @@
           <div id="parameterList" class="stack-list"></div>
         </section>
 
+        <section class="panel-section panel-section--transforms">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Transforms</p>
+              <h2>Derived curves</h2>
+            </div>
+          </div>
+
+          <div id="functionTransformPanel" class="transform-panel">
+            <div class="transform-toolbar">
+              <label class="transform-context transform-context--select">
+                <span class="transform-label">Target curve</span>
+                <select id="transformTargetSelect" class="transform-select" aria-label="Target curve"></select>
+              </label>
+              <button id="applyTransformBtn" class="action-button action-button--primary" type="button" disabled>Apply transform</button>
+            </div>
+
+            <div class="transform-grid" aria-label="Function transform presets">
+              <button class="transform-chip" data-transform="derivative" type="button">Derivative</button>
+              <button class="transform-chip" data-transform="secondDerivative" type="button">Second derivative</button>
+              <button class="transform-chip" data-transform="reciprocal" type="button">Reciprocal</button>
+              <button class="transform-chip" data-transform="log" type="button">Log</button>
+              <button class="transform-chip" data-transform="log10" type="button">Log10</button>
+              <button class="transform-chip" data-transform="abs" type="button">Absolute value</button>
+              <button class="transform-chip" data-transform="square" type="button">Square</button>
+              <button class="transform-chip" data-transform="negate" type="button">Negate</button>
+              <button class="transform-chip" data-transform="sqrt" type="button">Square root</button>
+              <button class="transform-chip" data-transform="exp" type="button">Exponential</button>
+            </div>
+
+            <div class="transform-preview">
+              <strong>Current selection</strong>
+              <p id="transformSelectionText">Choose a target curve and one transform. Derivatives use direct finite differences from the underlying evaluator.</p>
+            </div>
+
+            <div id="derivedCurveList" class="derived-curve-list"></div>
+          </div>
+        </section>
+
         <section class="panel-section">
           <div class="section-heading">
             <div>
@@ -51,7 +90,7 @@
             </div>
           </div>
 
-          <div class="toggle-row">
+          <div class="toggle-row axes-toggle-row">
             <label class="toggle-pill">
               <input id="logXToggle" type="checkbox">
               <span>Log x</span>
@@ -81,8 +120,8 @@
             </label>
           </div>
 
-          <div class="button-row">
-            <button id="applyViewBtn" class="action-button" type="button">Apply view</button>
+          <div class="section-actions section-actions--balanced">
+            <button id="applyViewBtn" class="action-button action-button--primary" type="button">Apply view</button>
             <button id="autoFitBtn" class="ghost-button" type="button">Auto fit y</button>
             <button id="resetViewBtn" class="ghost-button" type="button">Reset view</button>
           </div>
@@ -101,8 +140,8 @@
             </div>
           </div>
 
-          <div class="button-row">
-            <button id="exportSettingsBtn" class="action-button" type="button">Export settings</button>
+          <div class="section-actions section-actions--balanced section-actions--settings">
+            <button id="exportSettingsBtn" class="action-button action-button--primary" type="button">Export settings</button>
             <button id="loadSettingsBtn" class="ghost-button" type="button">Load settings</button>
           </div>
 
@@ -131,7 +170,10 @@
             <p class="section-kicker">Live plot</p>
             <h2>Comparison chart</h2>
           </div>
-          <div id="plotStatus" class="plot-status"></div>
+          <div class="plot-toolbar-actions">
+            <div id="plotStatus" class="plot-status"></div>
+            <button id="downloadImageBtn" class="ghost-button plot-toolbar-button" type="button">Download image</button>
+          </div>
         </div>
 
         <div class="plot-card">
