@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive Function Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Zero-build function plotting lab</p>
+        <h1>Interactive Function Explorer</h1>
+        <p class="hero-copy">
+          Edit formulas, tune parameters, compare multiple functions, switch axes to logarithmic scale,
+          and drag a region on the plot for precise zooming.
+        </p>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="control-panel">
+        <section class="panel-section">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Functions</p>
+              <h2>Definitions</h2>
+            </div>
+            <button id="addFunctionBtn" class="action-button" type="button">Add function</button>
+          </div>
+          <div id="functionList" class="stack-list"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Parameters</p>
+              <h2>Slider controls</h2>
+            </div>
+            <button id="addParameterBtn" class="action-button" type="button">Add parameter</button>
+          </div>
+          <div id="parameterList" class="stack-list"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Axes and view</p>
+              <h2>Viewport</h2>
+            </div>
+          </div>
+
+          <div class="toggle-row">
+            <label class="toggle-pill">
+              <input id="logXToggle" type="checkbox">
+              <span>Log x</span>
+            </label>
+            <label class="toggle-pill">
+              <input id="logYToggle" type="checkbox">
+              <span>Log y</span>
+            </label>
+          </div>
+
+          <div class="view-grid">
+            <label>
+              <span>x min</span>
+              <input id="xMinInput" type="number" step="any">
+            </label>
+            <label>
+              <span>x max</span>
+              <input id="xMaxInput" type="number" step="any">
+            </label>
+            <label>
+              <span>y min</span>
+              <input id="yMinInput" type="number" step="any">
+            </label>
+            <label>
+              <span>y max</span>
+              <input id="yMaxInput" type="number" step="any">
+            </label>
+          </div>
+
+          <div class="button-row">
+            <button id="applyViewBtn" class="action-button" type="button">Apply view</button>
+            <button id="autoFitBtn" class="ghost-button" type="button">Auto fit y</button>
+            <button id="resetViewBtn" class="ghost-button" type="button">Reset view</button>
+          </div>
+
+          <p class="helper-text">
+            Drag inside the plot area to zoom into a specific region. The graph is recomputed directly from
+            each formula on every redraw; it does not use interpolation or cached curve estimates.
+          </p>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Settings</p>
+              <h2>Export and load</h2>
+            </div>
+          </div>
+
+          <div class="button-row">
+            <button id="exportSettingsBtn" class="action-button" type="button">Export settings</button>
+            <button id="loadSettingsBtn" class="ghost-button" type="button">Load settings</button>
+          </div>
+
+          <input id="settingsFileInput" type="file" accept=".json,application/json" hidden>
+
+          <p class="helper-text">
+            Save the current formulas, parameters, axis mode, and viewport to a JSON file, or load a previous
+            configuration from disk.
+          </p>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Diagnostics</p>
+              <h2>Messages</h2>
+            </div>
+          </div>
+          <div id="messages" class="message-list" aria-live="polite"></div>
+        </section>
+      </aside>
+
+      <main class="plot-panel">
+        <div class="plot-toolbar">
+          <div>
+            <p class="section-kicker">Live plot</p>
+            <h2>Comparison chart</h2>
+          </div>
+          <div id="plotStatus" class="plot-status"></div>
+        </div>
+
+        <div class="plot-card">
+          <div id="legend" class="legend"></div>
+          <div class="canvas-frame">
+            <canvas id="plotCanvas" aria-label="Function plot" role="img"></canvas>
+            <div id="hoverTooltip" class="plot-tooltip" aria-hidden="true"></div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

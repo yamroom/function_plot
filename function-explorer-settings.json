@@ -1,0 +1,52 @@
+{
+  "format": "interactive-function-explorer",
+  "version": 1,
+  "functions": [
+    {
+      "definition": "f1(x) = 1/beta*ln(1+exp(beta*x))",
+      "color": "#d1495b",
+      "enabled": false
+    },
+    {
+      "definition": "f2(x) = max(x,0)",
+      "color": "#2c7da0",
+      "enabled": false
+    },
+    {
+      "definition": "f3(x) = (1/(1+exp(-beta*(x-1e-8))))",
+      "color": "#ef8a17",
+      "enabled": true
+    },
+    {
+      "definition": "f4(x) = (1/(1+exp(-beta*(log10(x)+cen))))",
+      "color": "#2a9d8f",
+      "enabled": true
+    }
+  ],
+  "parameters": [
+    {
+      "name": "beta",
+      "value": 4,
+      "min": 0.1,
+      "max": 50,
+      "step": 0.1
+    },
+    {
+      "name": "cen",
+      "value": 7.9,
+      "min": -10,
+      "max": 10,
+      "step": 0.1
+    }
+  ],
+  "axis": {
+    "logX": true,
+    "logY": true
+  },
+  "view": {
+    "xMin": 1e-20,
+    "xMax": 10,
+    "yMin": 1e-20,
+    "yMax": 2
+  }
+}
