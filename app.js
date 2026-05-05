@@ -2,7 +2,17 @@
   "use strict";
 
   const BUILTIN_ARITY = Object.freeze({
+    sin: [1, 1],
+    cos: [1, 1],
+    tan: [1, 1],
+    asin: [1, 1],
+    acos: [1, 1],
+    atan: [1, 1],
+    sinh: [1, 1],
+    cosh: [1, 1],
+    tanh: [1, 1],
     exp: [1, 1],
+    log: [1, 1],
     ln: [1, 1],
     log10: [1, 1],
     sqrt: [1, 1],
@@ -10,6 +20,12 @@
     min: [2, Infinity],
     max: [2, Infinity],
     pow: [2, 2],
+    pwr: [2, 2],
+    db: [1, 1],
+    int: [1, 1],
+    nint: [1, 1],
+    sgn: [1, 1],
+    sign: [2, 2],
     log1p: [1, 1],
     expm1: [1, 1]
   });
@@ -229,6 +245,7 @@
 
     state.parameters.forEach((param) => {
       const name = param.name.trim();
+      const canonicalName = normalizeIdentifier(name);
       const numeric = {
         value: toFiniteNumber(param.value),
         min: toFiniteNumber(param.min),
@@ -247,7 +264,7 @@
         parameterErrors.add(param.id);
       }
 
-      if (RESERVED_IDENTIFIERS.has(name)) {
+      if (RESERVED_IDENTIFIERS.has(canonicalName)) {
         messages.push(makeMessage("error", `Parameter "${name}" uses a reserved name.`, param.id));
         parameterErrors.add(param.id);
       }
@@ -271,20 +288,21 @@
         }
       }
 
-      if (parameterEntries.has(name)) {
+      if (parameterEntries.has(canonicalName)) {
+        const existingParam = parameterEntries.get(canonicalName);
         messages.push(makeMessage("error", `Parameter "${name}" is defined more than once.`, param.id));
-        messages.push(makeMessage("error", `Parameter "${name}" is defined more than once.`, parameterEntries.get(name).id));
+        messages.push(makeMessage("error", `Parameter "${existingParam.name}" is defined more than once.`, existingParam.id));
         parameterErrors.add(param.id);
-        parameterErrors.add(parameterEntries.get(name).id);
+        parameterErrors.add(existingParam.id);
       } else {
-        parameterEntries.set(name, { ...param, ...numeric, name });
+        parameterEntries.set(canonicalName, { ...param, ...numeric, name, canonicalName });
       }
     });
 
     const parameterMap = Object.create(null);
-    for (const [name, param] of parameterEntries.entries()) {
+    for (const [canonicalName, param] of parameterEntries.entries()) {
       if (!parameterErrors.has(param.id)) {
-        parameterMap[name] = param.value;
+        parameterMap[canonicalName] = param.value;
       }
     }
 
@@ -302,25 +320,26 @@
 
       try {
         const parsed = parseDefinition(definition);
-        rawFunctions.push({ ...row, name: parsed.name, ast: parsed.ast });
+        rawFunctions.push({ ...row, name: parsed.canonicalName, displayName: parsed.name, ast: parsed.ast });
 
-        if (RESERVED_IDENTIFIERS.has(parsed.name)) {
+        if (RESERVED_IDENTIFIERS.has(parsed.canonicalName)) {
           messages.push(makeMessage("error", `Function "${parsed.name}" uses a reserved name.`, row.id));
           functionErrors.add(row.id);
         }
 
-        if (Object.prototype.hasOwnProperty.call(parameterMap, parsed.name)) {
+        if (Object.prototype.hasOwnProperty.call(parameterMap, parsed.canonicalName)) {
           messages.push(makeMessage("error", `Function "${parsed.name}" conflicts with a parameter name.`, row.id));
           functionErrors.add(row.id);
         }
 
-        if (functionEntries.has(parsed.name)) {
+        if (functionEntries.has(parsed.canonicalName)) {
+          const existingFunction = functionEntries.get(parsed.canonicalName);
           messages.push(makeMessage("error", `Function "${parsed.name}" is defined more than once.`, row.id));
-          messages.push(makeMessage("error", `Function "${parsed.name}" is defined more than once.`, functionEntries.get(parsed.name).id));
+          messages.push(makeMessage("error", `Function "${existingFunction.displayName}" is defined more than once.`, existingFunction.id));
           functionErrors.add(row.id);
-          functionErrors.add(functionEntries.get(parsed.name).id);
+          functionErrors.add(existingFunction.id);
         } else {
-          functionEntries.set(parsed.name, row);
+          functionEntries.set(parsed.canonicalName, { id: row.id, displayName: parsed.name });
         }
       } catch (error) {
         messages.push(makeMessage("error", error.message, row.id));
@@ -370,8 +389,8 @@
         id: item.id,
         plotId: `function:${item.id}`,
         kind: "function",
-        name: item.name,
-        expressionText: `${item.name}(x)`,
+        name: item.displayName,
+        expressionText: `${item.displayName}(x)`,
         definition: item.definition,
         annotationText: item.definition,
         color: item.color,
@@ -452,14 +471,14 @@
 
     walkAst(ast, (node) => {
       if (node.type === "symbol") {
-        if (node.name === "x" || node.name === "pi" || node.name === "e" || parameterNames.has(node.name)) {
+        if (node.canonicalName === "x" || node.canonicalName === "pi" || node.canonicalName === "e" || parameterNames.has(node.canonicalName)) {
           return;
         }
         messages.push(`Unknown symbol "${node.name}". Parameters must be declared separately.`);
       }
 
       if (node.type === "call") {
-        const arity = BUILTIN_ARITY[node.name];
+        const arity = BUILTIN_ARITY[node.canonicalName];
         if (arity) {
           if (node.args.length < arity[0] || node.args.length > arity[1]) {
             const expected = arity[0] === arity[1] ? `${arity[0]}` : `${arity[0]}..${arity[1]}`;
@@ -468,7 +487,7 @@
           return;
         }
 
-        if (!functionNames.has(node.name)) {
+        if (!functionNames.has(node.canonicalName)) {
           messages.push(`Unknown function "${node.name}".`);
           return;
         }
@@ -478,7 +497,7 @@
           return;
         }
 
-        dependencies.add(node.name);
+        dependencies.add(node.canonicalName);
       }
     });
 
@@ -496,7 +515,10 @@
       if (marker === "visiting") {
         const cycleStart = stack.indexOf(name);
         const cyclePath = stack.slice(cycleStart).concat(name);
-        const cycleText = cyclePath.join(" -> ");
+        const cycleText = cyclePath.map((cycleName) => {
+          const cycleItem = byName.get(cycleName);
+          return cycleItem ? cycleItem.displayName || cycleItem.name : cycleName;
+        }).join(" -> ");
         cyclePath.slice(0, -1).forEach((cycleName) => {
           const item = byName.get(cycleName);
           if (item) {
@@ -560,26 +582,26 @@
         };
 
       case "symbol":
-        if (ast.name === "x") {
+        if (ast.canonicalName === "x") {
           return function compiledX(x) {
             return x;
           };
         }
 
-        if (ast.name === "pi") {
+        if (ast.canonicalName === "pi") {
           return function compiledPi() {
             return Math.PI;
           };
         }
 
-        if (ast.name === "e") {
+        if (ast.canonicalName === "e") {
           return function compiledE() {
             return Math.E;
           };
         }
 
         return function compiledParameter() {
-          return environment.parameterMap[ast.name];
+          return environment.parameterMap[ast.canonicalName];
         };
 
       case "unary": {
@@ -629,7 +651,7 @@
       }
 
       case "call": {
-        const softplusArg = ast.name === "ln" ? matchSoftplusArg(ast.args[0]) : null;
+        const softplusArg = ast.canonicalName === "ln" || ast.canonicalName === "log" ? matchSoftplusArg(ast.args[0]) : null;
         if (softplusArg) {
           const inner = compileAst(softplusArg, environment);
           return function compiledSoftplus(x) {
@@ -638,7 +660,7 @@
         }
 
         const compiledArgs = ast.args.map((arg) => compileAst(arg, environment));
-        const builtin = makeBuiltinExecutor(ast.name);
+        const builtin = makeBuiltinExecutor(ast.canonicalName);
         if (builtin) {
           return function compiledBuiltin(x) {
             const args = compiledArgs.map((executor) => executor(x));
@@ -647,7 +669,7 @@
         }
 
         return function compiledUserFunction(x) {
-          const target = environment.compiledByName[ast.name];
+          const target = environment.compiledByName[ast.canonicalName];
           return target(compiledArgs[0](x));
         };
       }
@@ -659,14 +681,33 @@
 
   function makeBuiltinExecutor(name) {
     switch (name) {
+      case "sin":
+        return (args) => Math.sin(args[0]);
+      case "cos":
+        return (args) => Math.cos(args[0]);
+      case "tan":
+        return (args) => Math.tan(args[0]);
+      case "asin":
+        return (args) => Math.asin(args[0]);
+      case "acos":
+        return (args) => Math.acos(args[0]);
+      case "atan":
+        return (args) => Math.atan(args[0]);
+      case "sinh":
+        return (args) => Math.sinh(args[0]);
+      case "cosh":
+        return (args) => Math.cosh(args[0]);
+      case "tanh":
+        return (args) => Math.tanh(args[0]);
       case "exp":
         return (args) => Math.exp(args[0]);
+      case "log":
       case "ln":
-        return (args) => Math.log(args[0]);
+        return (args) => signedLog(args[0]);
       case "log10":
-        return (args) => Math.log10(args[0]);
+        return (args) => signedLog10(args[0]);
       case "sqrt":
-        return (args) => Math.sqrt(args[0]);
+        return (args) => signedSqrt(args[0]);
       case "abs":
         return (args) => Math.abs(args[0]);
       case "min":
@@ -674,7 +715,19 @@
       case "max":
         return (args) => Math.max(...args);
       case "pow":
-        return (args) => Math.pow(args[0], args[1]);
+        return (args) => hspicePow(args[0], args[1]);
+      case "pwr":
+        return (args) => hspiceSignedPower(args[0], args[1]);
+      case "db":
+        return (args) => signedDecibels(args[0]);
+      case "int":
+        return (args) => Math.trunc(args[0]);
+      case "nint":
+        return (args) => roundNearestInteger(args[0]);
+      case "sgn":
+        return (args) => signum(args[0]);
+      case "sign":
+        return (args) => transferSign(args[0], args[1]);
       case "log1p":
         return (args) => Math.log1p(args[0]);
       case "expm1":
@@ -702,7 +755,7 @@
     ];
 
     for (const [oneCandidate, expCandidate] of possibilities) {
-      if (isNumericLiteral(oneCandidate, 1) && expCandidate.type === "call" && expCandidate.name === "exp" && expCandidate.args.length === 1) {
+      if (isNumericLiteral(oneCandidate, 1) && expCandidate.type === "call" && expCandidate.canonicalName === "exp" && expCandidate.args.length === 1) {
         return expCandidate.args[0];
       }
     }
@@ -720,11 +773,11 @@
     const ast = parser.parseExpression();
     parser.expect("eof", "Unexpected extra tokens after the formula.");
 
-    if (argToken.value !== "x") {
+    if (normalizeIdentifier(argToken.value) !== "x") {
       throw new Error(`Function "${nameToken.value}" must use "x" as its argument.`);
     }
 
-    return { name: nameToken.value, ast };
+    return { name: nameToken.value, canonicalName: normalizeIdentifier(nameToken.value), ast };
   }
 
   function tokenize(source) {
@@ -909,9 +962,9 @@
             } while (this.match("punct", ","));
             this.expect("punct", 'Expected ")" to close the call.', ")");
           }
-          return { type: "call", name: token.value, args };
+          return { type: "call", name: token.value, canonicalName: normalizeIdentifier(token.value), args };
         }
-        return { type: "symbol", name: token.value };
+        return { type: "symbol", name: token.value, canonicalName: normalizeIdentifier(token.value) };
       }
 
       if (this.match("punct", "(")) {
@@ -2411,23 +2464,24 @@
     const exportCanvas = document.createElement("canvas");
     const exportCtx = exportCanvas.getContext("2d");
     const scale = Math.max(1, Math.round(window.devicePixelRatio || 1));
-    const padding = 28 * scale;
-    const panelGap = 20 * scale;
-    const panelPadding = 26 * scale;
-    const titleFont = `700 ${30 * scale}px "Aptos", "Segoe UI", sans-serif`;
-    const metaFont = `${16 * scale}px "Aptos", "Segoe UI", sans-serif`;
-    const nameFont = `700 ${22 * scale}px "Aptos", "Segoe UI", sans-serif`;
-    const formulaFont = `${18 * scale}px "Consolas", "Cascadia Mono", "Segoe UI Mono", monospace`;
-    const panelWidth = Math.max(360 * scale, Math.round(plotWidth * 0.34));
+    const panelGap = 14 * scale;
+    const panelPadding = 20 * scale;
+    const titleFont = `700 ${24 * scale}px "Aptos", "Segoe UI", sans-serif`;
+    const metaFont = `600 ${14 * scale}px "Aptos", "Segoe UI", sans-serif`;
+    const rangeFont = `${14 * scale}px "Aptos", "Segoe UI", sans-serif`;
+    const nameFont = `700 ${18 * scale}px "Aptos", "Segoe UI", sans-serif`;
+    const formulaFont = `${15 * scale}px "Consolas", "Cascadia Mono", "Segoe UI Mono", monospace`;
+    const panelWidth = Math.min(Math.max(Math.round(plotWidth * 0.26), 280 * scale), 340 * scale);
     const panelContentWidth = panelWidth - panelPadding * 2;
-    const rangeLine = buildExportRangeText();
+    const summary = buildExportSummary();
     const panelHeight = measureAnnotationPanelHeight(entries, exportCtx, panelContentWidth, panelPadding, {
       titleFont,
       metaFont,
+      rangeFont,
       nameFont,
       formulaFont,
       scale,
-      rangeLine
+      summary
     });
 
     exportCanvas.width = plotWidth + panelGap + panelWidth;
@@ -2439,113 +2493,209 @@
 
     const panelLeft = plotWidth + panelGap;
     const panelTop = 0;
-    exportCtx.fillStyle = "rgba(255, 252, 246, 0.98)";
+    exportCtx.fillStyle = "rgba(255, 251, 245, 0.98)";
     exportCtx.fillRect(panelLeft, panelTop, panelWidth, exportCanvas.height);
-    exportCtx.strokeStyle = "rgba(23, 33, 43, 0.12)";
+    exportCtx.strokeStyle = "rgba(23, 33, 43, 0.08)";
     exportCtx.lineWidth = 1;
-    exportCtx.strokeRect(panelLeft + 0.5, panelTop + 0.5, panelWidth - 1, exportCanvas.height - 1);
+    exportCtx.beginPath();
+    exportCtx.moveTo(panelLeft + 0.5, panelTop);
+    exportCtx.lineTo(panelLeft + 0.5, exportCanvas.height);
+    exportCtx.stroke();
 
     let cursorY = panelTop + panelPadding;
     exportCtx.fillStyle = "#17212b";
     exportCtx.font = titleFont;
     exportCtx.textBaseline = "top";
-    exportCtx.fillText("Function Annotations", panelLeft + panelPadding, cursorY);
-    cursorY += 38 * scale;
+    exportCtx.fillText(summary.title, panelLeft + panelPadding, cursorY);
+    cursorY += 30 * scale;
 
-    exportCtx.fillStyle = "#5f6b75";
+    exportCtx.fillStyle = "#51606d";
     exportCtx.font = metaFont;
-    const rangeLines = wrapTextToLines(exportCtx, rangeLine, panelContentWidth, metaFont);
-    rangeLines.forEach((line) => {
+    wrapTextToLines(exportCtx, summary.axisSummary, panelContentWidth, metaFont).forEach((line) => {
       exportCtx.fillText(line, panelLeft + panelPadding, cursorY);
-      cursorY += 22 * scale;
+      cursorY += 18 * scale;
     });
+    cursorY += 6 * scale;
+
+    exportCtx.fillStyle = "#6a7680";
+    exportCtx.font = rangeFont;
+    [summary.xRange, summary.yRange].forEach((text) => {
+      wrapTextToLines(exportCtx, text, panelContentWidth, rangeFont).forEach((line) => {
+        exportCtx.fillText(line, panelLeft + panelPadding, cursorY);
+        cursorY += 17 * scale;
+      });
+    });
+    cursorY += 10 * scale;
+
+    exportCtx.strokeStyle = "rgba(23, 33, 43, 0.08)";
+    exportCtx.beginPath();
+    exportCtx.moveTo(panelLeft + panelPadding, cursorY);
+    exportCtx.lineTo(panelLeft + panelWidth - panelPadding, cursorY);
+    exportCtx.stroke();
     cursorY += 12 * scale;
 
     if (entries.length === 0) {
-      exportCtx.fillStyle = "#5f6b75";
-      exportCtx.fillText("No active curves are currently visible.", panelLeft + panelPadding, cursorY);
+      exportCtx.fillStyle = "#6a7680";
+      exportCtx.font = rangeFont;
+      wrapTextToLines(exportCtx, "No active curves are currently visible.", panelContentWidth, rangeFont).forEach((line) => {
+        exportCtx.fillText(line, panelLeft + panelPadding, cursorY);
+        cursorY += 17 * scale;
+      });
       return exportCanvas;
     }
 
     entries.forEach((entry) => {
-      const formulaLines = wrapTextToLines(exportCtx, entry.annotationText, panelContentWidth - 48 * scale, formulaFont);
-      const cardHeight = Math.max(96 * scale, 34 * scale + formulaLines.length * 24 * scale + 28 * scale);
+      const cardWidth = panelContentWidth;
+      const cardX = panelLeft + panelPadding;
+      const cardPaddingX = 14 * scale;
+      const cardPaddingY = 12 * scale;
+      const dotRadius = 7 * scale;
+      const formulaLineHeight = 19 * scale;
+      const formulaLines = wrapTextToLines(exportCtx, entry.annotationText, cardWidth - cardPaddingX * 2, formulaFont, { mode: "formula" });
+      const cardHeight = Math.max(64 * scale, cardPaddingY * 2 + 20 * scale + 8 * scale + formulaLines.length * formulaLineHeight);
 
-      exportCtx.fillStyle = "rgba(255, 255, 255, 0.92)";
-      exportCtx.strokeStyle = "rgba(23, 33, 43, 0.1)";
+      exportCtx.fillStyle = "rgba(255, 255, 255, 0.82)";
+      exportCtx.strokeStyle = "rgba(23, 33, 43, 0.08)";
       exportCtx.lineWidth = 1;
-      roundRect(exportCtx, panelLeft + panelPadding, cursorY, panelContentWidth, cardHeight, 18 * scale);
+      roundRect(exportCtx, cardX, cursorY, cardWidth, cardHeight, 14 * scale);
       exportCtx.fill();
       exportCtx.stroke();
 
-      const cardLeft = panelLeft + panelPadding + 18 * scale;
-      const cardTop = cursorY + 16 * scale;
+      const cardLeft = cardX + cardPaddingX;
+      const cardTop = cursorY + cardPaddingY;
       exportCtx.fillStyle = entry.color;
       exportCtx.beginPath();
-      exportCtx.arc(cardLeft + 8 * scale, cardTop + 12 * scale, 9 * scale, 0, Math.PI * 2);
+      exportCtx.arc(cardLeft + dotRadius, cardTop + 9 * scale, dotRadius, 0, Math.PI * 2);
       exportCtx.fill();
 
       exportCtx.fillStyle = "#17212b";
       exportCtx.font = nameFont;
-      exportCtx.fillText(entry.name, cardLeft + 28 * scale, cardTop);
+      exportCtx.fillText(entry.name, cardLeft + 20 * scale, cardTop - 4 * scale);
 
-      exportCtx.fillStyle = "#5f6b75";
+      exportCtx.fillStyle = "#4f5964";
       exportCtx.font = formulaFont;
-      let formulaY = cardTop + 34 * scale;
+      let formulaY = cardTop + 22 * scale;
       formulaLines.forEach((line) => {
-        exportCtx.fillText(line, cardLeft + 28 * scale, formulaY);
-        formulaY += 24 * scale;
+        exportCtx.fillText(line, cardLeft, formulaY);
+        formulaY += formulaLineHeight;
       });
-      cursorY += cardHeight + 14 * scale;
+      cursorY += cardHeight + 9 * scale;
     });
 
     return exportCanvas;
   }
 
   function measureAnnotationPanelHeight(entries, exportCtx, panelContentWidth, panelPadding, typography) {
-    const { titleFont, metaFont, formulaFont, scale, rangeLine } = typography;
+    const { titleFont, metaFont, rangeFont, formulaFont, scale, summary } = typography;
     let height = panelPadding;
-    exportCtx.font = titleFont;
-    height += 38 * scale;
-
-    const rangeLines = wrapTextToLines(exportCtx, rangeLine, panelContentWidth, metaFont);
-    height += rangeLines.length * 22 * scale + 12 * scale;
+    height += 30 * scale;
+    height += wrapTextToLines(exportCtx, summary.axisSummary, panelContentWidth, metaFont).length * 18 * scale;
+    height += 6 * scale;
+    height += wrapTextToLines(exportCtx, summary.xRange, panelContentWidth, rangeFont).length * 17 * scale;
+    height += wrapTextToLines(exportCtx, summary.yRange, panelContentWidth, rangeFont).length * 17 * scale;
+    height += 22 * scale;
 
     if (entries.length === 0) {
-      return height + 48 * scale;
+      return height + 36 * scale + panelPadding;
     }
 
     entries.forEach((entry) => {
-      const formulaLines = wrapTextToLines(exportCtx, entry.annotationText, panelContentWidth - 48 * scale, formulaFont);
-      const cardHeight = Math.max(96 * scale, 34 * scale + formulaLines.length * 24 * scale + 28 * scale);
-      height += cardHeight + 14 * scale;
+      const cardPaddingY = 12 * scale;
+      const formulaLineHeight = 19 * scale;
+      const formulaLines = wrapTextToLines(exportCtx, entry.annotationText, panelContentWidth - 28 * scale, formulaFont, { mode: "formula" });
+      const cardHeight = Math.max(64 * scale, cardPaddingY * 2 + 20 * scale + 8 * scale + formulaLines.length * formulaLineHeight);
+      height += cardHeight + 9 * scale;
     });
 
     return height + panelPadding;
   }
 
-  function wrapTextToLines(context, text, maxWidth, font) {
+  function wrapTextToLines(context, text, maxWidth, font, options = {}) {
     context.font = font;
     const normalized = String(text);
     if (!normalized.trim()) {
       return [""];
     }
 
+    const mode = options.mode === "formula" ? "formula" : "text";
+    const tokens = buildWrapTokens(normalized, mode);
     const lines = [];
     let current = "";
-    for (const character of normalized) {
-      const candidate = current + character;
-      if (current && context.measureText(candidate).width > maxWidth) {
-        lines.push(current);
-        current = character;
-      } else {
-        current = candidate;
+
+    function pushCurrent() {
+      const trimmed = current.trimEnd();
+      if (trimmed) {
+        lines.push(trimmed);
       }
+      current = "";
     }
-    if (current) {
-      lines.push(current);
+
+    function appendLongToken(token) {
+      let segment = "";
+      for (const character of token) {
+        if (!segment && /\s/.test(character)) {
+          continue;
+        }
+        const candidate = segment + character;
+        if (segment && context.measureText(candidate).width > maxWidth) {
+          lines.push(segment.trimEnd());
+          segment = /\s/.test(character) ? "" : character;
+        } else {
+          segment = candidate;
+        }
+      }
+      current = segment;
+    }
+
+    tokens.forEach((token) => {
+      const tokenText = current ? token : token.replace(/^\s+/, "");
+      if (!tokenText) {
+        return;
+      }
+
+      const candidate = current + tokenText;
+      if (!current || context.measureText(candidate).width <= maxWidth) {
+        current = candidate;
+        return;
+      }
+
+      pushCurrent();
+      const nextToken = token.replace(/^\s+/, "");
+      if (!nextToken) {
+        return;
+      }
+
+      if (context.measureText(nextToken).width <= maxWidth) {
+        current = nextToken;
+        return;
+      }
+
+      appendLongToken(nextToken);
+    });
+
+    if (current.trim()) {
+      lines.push(current.trimEnd());
     }
     return lines;
+  }
+
+  function buildWrapTokens(text, mode) {
+    const tokens = [];
+    let current = "";
+    const breakAfter = mode === "formula" ? ",=+-*/^()[]" : "";
+
+    for (const character of String(text)) {
+      current += character;
+      if (/\s/.test(character) || breakAfter.includes(character)) {
+        tokens.push(current);
+        current = "";
+      }
+    }
+
+    if (current) {
+      tokens.push(current);
+    }
+    return tokens;
   }
 
   function roundRect(context, x, y, width, height, radius) {
@@ -2559,10 +2709,15 @@
     context.closePath();
   }
 
-  function buildExportRangeText() {
+  function buildExportSummary() {
     const xMode = state.axis.logX ? "log x" : "linear x";
     const yMode = state.axis.logY ? "log y" : "linear y";
-    return `${xMode} | ${yMode} | x: ${formatNumber(state.view.xMin)} to ${formatNumber(state.view.xMax)} | y: ${formatNumber(state.view.yMin)} to ${formatNumber(state.view.yMax)}`;
+    return {
+      title: "Curves",
+      axisSummary: `${xMode} / ${yMode}`,
+      xRange: `x: ${formatNumber(state.view.xMin)} to ${formatNumber(state.view.xMax)}`,
+      yRange: `y: ${formatNumber(state.view.yMin)} to ${formatNumber(state.view.yMax)}`
+    };
   }
 
   function buildTimestampLabel() {
@@ -2781,7 +2936,7 @@
     functions.forEach((row) => {
       try {
         const parsed = parseDefinition(row.definition.trim());
-        const match = /^f(\d+)$/.exec(parsed.name);
+        const match = /^f(\d+)$/.exec(parsed.canonicalName);
         if (match) {
           maxIndex = Math.max(maxIndex, Number(match[1]));
         }
@@ -2795,7 +2950,7 @@
   function deriveNextParameterIndex(parameters) {
     let maxIndex = parameters.length;
     parameters.forEach((row) => {
-      const match = /^a(\d+)$/.exec(String(row.name || "").trim());
+      const match = /^a(\d+)$/.exec(normalizeIdentifier(String(row.name || "").trim()));
       if (match) {
         maxIndex = Math.max(maxIndex, Number(match[1]));
       }
@@ -2821,6 +2976,67 @@
 
   function syntaxError(message, position) {
     return new Error(position >= 0 ? `${message} At character ${position + 1}.` : message);
+  }
+
+  function normalizeIdentifier(name) {
+    return String(name).toLowerCase();
+  }
+
+  function signum(value) {
+    if (value > 0) {
+      return 1;
+    }
+    if (value < 0) {
+      return -1;
+    }
+    return 0;
+  }
+
+  function signedLog(value) {
+    if (value === 0) {
+      return Number.NaN;
+    }
+    return signum(value) * Math.log(Math.abs(value));
+  }
+
+  function signedLog10(value) {
+    if (value === 0) {
+      return Number.NaN;
+    }
+    return signum(value) * Math.log10(Math.abs(value));
+  }
+
+  function signedSqrt(value) {
+    if (value === 0) {
+      return 0;
+    }
+    return signum(value) * Math.sqrt(Math.abs(value));
+  }
+
+  function hspicePow(base, exponent) {
+    return Math.pow(base, Math.trunc(exponent));
+  }
+
+  function hspiceSignedPower(base, exponent) {
+    return signum(base) * Math.pow(Math.abs(base), exponent);
+  }
+
+  function signedDecibels(value) {
+    if (value === 0) {
+      return Number.NaN;
+    }
+    return signum(value) * 20 * Math.log10(Math.abs(value));
+  }
+
+  function roundNearestInteger(value) {
+    if (!Number.isFinite(value)) {
+      return Number.NaN;
+    }
+    return value >= 0 ? Math.floor(value + 0.5) : Math.ceil(value - 0.5);
+  }
+
+  function transferSign(value, signSource) {
+    return signum(signSource) * Math.abs(value);
   }
 
   function niceNumber(value, roundResult) {

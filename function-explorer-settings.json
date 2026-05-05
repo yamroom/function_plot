@@ -1,52 +1,41 @@
 {
   "format": "interactive-function-explorer",
-  "version": 1,
+  "version": 2,
   "functions": [
     {
-      "definition": "f1(x) = 1/beta*ln(1+exp(beta*x))",
+      "definition": "f1(x) = 1/( 1 + (x/2)^2 )^4",
       "color": "#d1495b",
-      "enabled": false
-    },
-    {
-      "definition": "f2(x) = max(x,0)",
-      "color": "#2c7da0",
-      "enabled": false
-    },
-    {
-      "definition": "f3(x) = (1/(1+exp(-beta*(x-1e-8))))",
-      "color": "#ef8a17",
       "enabled": true
     },
     {
-      "definition": "f4(x) = (1/(1+exp(-beta*(log10(x)+cen))))",
-      "color": "#2a9d8f",
+      "definition": "f2(x) = tanh(x/100)",
+      "color": "#2c7da0",
+      "enabled": true
+    },
+    {
+      "definition": "f3(x) =sin(x/100)",
+      "color": "#ef8a17",
       "enabled": true
     }
   ],
   "parameters": [
     {
       "name": "beta",
-      "value": 4,
+      "value": 5,
       "min": 0.1,
       "max": 50,
       "step": 0.1
-    },
-    {
-      "name": "cen",
-      "value": 7.9,
-      "min": -10,
-      "max": 10,
-      "step": 0.1
     }
   ],
+  "derivedCurves": [],
   "axis": {
-    "logX": true,
-    "logY": true
+    "logX": false,
+    "logY": false
   },
   "view": {
-    "xMin": 1e-20,
+    "xMin": -10,
     "xMax": 10,
-    "yMin": 1e-20,
-    "yMax": 2
+    "yMin": -0.1878200899785744,
+    "yMax": 1.0879866733317463
   }
 }
